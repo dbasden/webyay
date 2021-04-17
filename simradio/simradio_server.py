@@ -19,7 +19,7 @@ async def simradio_server(ws, path):
             try:
                 response = radio.handle_message(message)
                 if response:
-                    await ws.send(response)
+                    await ws.send(bytes(response))
             except ValueError as e:
                 await ws.send(f"Byte me: {e}")
     except websockets.exceptions.ConnectionClosedError:
