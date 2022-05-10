@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head><title>webyay</title>
+    <style>
+        #console {
+            width: 98%;
+            height: 15em;
+        }
+    </style>
+    <script lang="javascript">
+
+        // This isn't the worst code in the world but it is close
+        clog = (msg) => {
+            console.log(msg)
+            document.getElementById('console').textContent += msg + '\n';
+        }
+
+        async function debugLogPort({readable}) {
+            const decoder = new TextDecoder();
+            await readable.pipeTo(new WritableStream({
+                autoAllocateChunkSize: 64,
+                write(chunk) {
+                    clog(`DEBUG: new chunk: ${chunk.toString()}`);
+                    const resp = decoder.decode(chunk);
+                    clog(`<<YAESU: ${resp}`)
+                },
+                close() {
+                    clog(`DEBUG stream close`);
+                },
+                abort(e) {
+                    clog(`DEBUG: stream abort: ${e.toString()}`);
+                }
+            }));
+        }
+
+        async function pokeYaesu({writable}) {
+            await new ReadableStream({
+                start(controller) {
+                    clog(">>YAESU: ID;");
+                    const cmd = "ID;";
+                    // this is going to end badly because Yaesu CAT doesn't UTF-8
+                    //controller.enqueue(new TextEncoder().encode(cmd));
+                    // Not like this is better admittedly but at least you can't
+                    // do injection attacks from multibyte encoding
+                    controller.enqueue(Uint8ClampedArray.from(cmd, x => x.charCodeAt(0)));
+                    controller.close()
+                },
+                cancel() {
+                    clog("cancelled write to yaesu");
+                }
+            }).pipeTo(writable);
+        }
+
+        async function initWebSerial() {
+            if (!('serial' in navigator)) {
+                clog("No web serial support :( Can't talk to radio");
+                return;
+            }
+            clog("starting webserial");
+            // all ports we've previously had access to
+            const ports = await navigator.serial.getPorts();
+            let port;
+            if (ports.length) {
+                port = ports[0];
+                clog(`using existing port ${port.toString()}`)
+            } else {
+                // request port from user
+                port = await navigator.serial.requestPort();
+            }
+            port.addEventListener('connect', (e) => {
+                clog(`EVENT: port ${e.target} connected`)
+            });
+            clog(`port info: ${port.getInfo().toString()}`);
+            clog(`opening port...`);
+            await port.open({baudRate: 38400});
+            await Promise.all([
+                debugLogPort(port),
+                pokeYaesu(port)
+            ]);
+            // this won't work as the debugging pipeTo holds a lock
+            //clog(`closing port...`);
+            //await port.close();
+            //clog(`closed.`);
+        }
+    </script>
+</head>
+<body><label for="console">Console</label><textarea id="console"></textarea></body>
+<button id="initButton" onClick="initWebSerial()">start</button>
+</html>
