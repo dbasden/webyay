@@ -15,22 +15,32 @@
             document.getElementById('console').textContent += msg + '\n';
         }
 
-        async function debugLogPort({readable}) {
-            const decoder = new TextDecoder();
-            await readable.pipeTo(new WritableStream({
+        function debugLogPort() {
+            return new WritableStream({
                 autoAllocateChunkSize: 64,
-                write(chunk) {
-                    clog(`DEBUG: new chunk: ${chunk.toString()}`);
-                    const resp = decoder.decode(chunk);
-                    clog(`<<YAESU: ${resp}`)
+                write(chunk) { clog(`DEBUG: new chunk: ${chunk.toString()}`); },
+                close() { clog(`DEBUG stream close`); },
+                abort(e) { clog(`DEBUG: stream abort: ${e.toString()}`); }
+            });
+        }
+
+        function yaesuParser() {
+            return new TransformStream({
+                start() {
+                    this.decoder = new TextDecoder();
+                    this.buffered = "";
                 },
-                close() {
-                    clog(`DEBUG stream close`);
-                },
-                abort(e) {
-                    clog(`DEBUG: stream abort: ${e.toString()}`);
+                transform(chunk, controller) {
+                    this.buffered += this.decoder.decode(chunk);
+                    while (this.buffered.indexOf(";") >= 0) {
+                        const offset = this.buffered.indexOf(";");
+                        const rxFrame = this.buffered.slice(0, offset+1);
+                        clog(`<<YAESU: ${rxFrame}`);
+                        controller.enqueue(rxFrame);
+                        this.buffered = this.buffered.slice(offset+1);
+                    }
                 }
-            }));
+            })
         }
 
         async function pokeYaesu({writable}) {
@@ -73,8 +83,10 @@
             clog(`port info: ${port.getInfo().toString()}`);
             clog(`opening port...`);
             await port.open({baudRate: 38400});
+            const [read, readRawDupe] = port.readable.tee();
             await Promise.all([
-                debugLogPort(port),
+                read.pipeThrough(yaesuParser()).pipeTo(debugLogPort()),
+                readRawDupe.pipeTo(debugLogPort()),
                 pokeYaesu(port)
             ]);
             // this won't work as the debugging pipeTo holds a lock
