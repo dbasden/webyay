@@ -8,8 +8,21 @@
         }
     </style>
     <script lang="javascript">
-
         // This isn't the worst code in the world but it is close
+
+        class YaesuCmd {
+            cmd;
+            param;
+            constructor (cmd, param) {
+                this.cmd = cmd;
+                this.param = param;
+            }
+            toString = () => `${this.cmd}[${this.param}]`
+            get CAT() {
+                return `${this.cmd}${this.param};`;
+            }
+        }
+
         clog = (msg) => {
             console.log(msg)
             document.getElementById('console').textContent += msg + '\n';
@@ -24,7 +37,7 @@
             });
         }
 
-        function yaesuParser() {
+        function yaesuDeframer() {
             return new TransformStream({
                 start() {
                     this.decoder = new TextDecoder();
@@ -34,31 +47,54 @@
                     this.buffered += this.decoder.decode(chunk);
                     while (this.buffered.indexOf(";") >= 0) {
                         const offset = this.buffered.indexOf(";");
-                        const rxFrame = this.buffered.slice(0, offset+1);
+                        const rxFrame = this.buffered.slice(0, offset);
                         clog(`<<YAESU: ${rxFrame}`);
-                        controller.enqueue(rxFrame);
+                        controller.enqueue(
+                            new YaesuCmd(rxFrame.slice(0,2), rxFrame.slice(2))
+                        );
                         this.buffered = this.buffered.slice(offset+1);
                     }
                 }
             })
         }
 
-        async function pokeYaesu({writable}) {
-            await new ReadableStream({
-                start(controller) {
-                    clog(">>YAESU: ID;");
-                    const cmd = "ID;";
-                    // this is going to end badly because Yaesu CAT doesn't UTF-8
-                    //controller.enqueue(new TextEncoder().encode(cmd));
-                    // Not like this is better admittedly but at least you can't
-                    // do injection attacks from multibyte encoding
-                    controller.enqueue(Uint8ClampedArray.from(cmd, x => x.charCodeAt(0)));
-                    controller.close()
-                },
-                cancel() {
-                    clog("cancelled write to yaesu");
+        /* converts YaesuCmd objects to bytes in yaesu CAT format */
+        function yaesuFramer() {
+            return new TransformStream({
+                transform(yaesuCmd, controller) {
+                    // This is a bad plan as the yaesu does not speak UTF-8.
+                    controller.enqueue(Uint8ClampedArray.from(yaesuCmd.CAT, x => x.charCodeAt(0)));
                 }
-            }).pipeTo(writable);
+            })
+        }
+
+        class YaesuCATEventBridge {
+            constructor () {
+                this._sink_ts = new TransformStream();
+                window.addEventListener("commandToRadio", (ev) => this._handleEventToRadio(ev));
+            }
+
+            /* readable stream of YaesuCmds */
+            get readable() {
+                return this._sink_ts.readable;
+            }
+
+            /* writable stream that sinks YaesuCmds and emits events */
+            get writable() {
+                return new WritableStream({
+                    write(yaesuCmd) {
+                        window.dispatchEvent(new CustomEvent("commandFromRadio", { detail: yaesuCmd })                        )
+                    }
+                })
+            }
+
+            _handleEventToRadio(ev) {
+                const writer = this._sink_ts.writable.getWriter();
+                writer.ready
+                    .then(() => { return writer.write(ev.detail) })
+                    .then(() => { writer.releaseLock() })
+                    .catch(console.error);
+            }
         }
 
         async function initWebSerial() {
@@ -84,15 +120,16 @@
             clog(`opening port...`);
             await port.open({baudRate: 38400});
             const [read, readRawDupe] = port.readable.tee();
+            const catEventBridge = new YaesuCATEventBridge();
+            window.addEventListener("commandFromRadio", console.log);
             await Promise.all([
-                read.pipeThrough(yaesuParser()).pipeTo(debugLogPort()),
+                read.pipeThrough(yaesuDeframer())
+                    .pipeTo(catEventBridge.writable),
                 readRawDupe.pipeTo(debugLogPort()),
-                pokeYaesu(port)
+                catEventBridge.readable
+                    .pipeThrough(yaesuFramer())
+                    .pipeTo(port.writable)
             ]);
-            // this won't work as the debugging pipeTo holds a lock
-            //clog(`closing port...`);
-            //await port.close();
-            //clog(`closed.`);
         }
     </script>
 </head>
