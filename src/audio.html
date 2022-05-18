@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Audio test</title>
+    <script lang="javascript">
+        async function getRadioAudioSourceDev() {
+            /* label: "Microphone (USB Audio CODEC ) (08bb:29b3)" */
+            for (const dev of await navigator.mediaDevices.enumerateDevices()) {
+                if (dev.kind == "audioinput" && dev.label == "Microphone (USB Audio CODEC ) (08bb:29b3)") {
+                    console.log(dev);
+                    return dev;
+                }
+            }
+        }
+        async function initAudio() {
+            const dev = await getRadioAudioSourceDev();
+            const audioContext = new AudioContext();
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: true, video: false, deviceId: dev.deviceId
+            });
+            const source = audioContext.createMediaStreamSource(stream);
+
+            // FFT
+            const analyser = audioContext.createAnalyser();
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            // Canvas
+            const canvas = document.getElementById("waterfall");
+            const ctx = canvas.getContext('2d', {alpha: false});
+            const imageData = ctx.createImageData(512, 1);
+            const fft = new Uint8Array(new ArrayBuffer(1024));
+            analyser.fftSize = 8192;
+            analyser.smoothingTimeConstant = 0;
+
+            function renderWaterfall() {
+                analyser.getByteFrequencyData(fft);
+                const pixels = imageData.data;
+                for (var i = 0; i < 2048; i += 4) {
+                    pixels[i] = fft[i / 4];
+                    pixels[i + 1] = fft[i / 4];
+                    pixels[i + 2] = fft[i / 4];
+                    pixels[i + 3] = 255;
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+                // Drawing a canvas onto itself seems optimised in chrome
+                // (CSS scaling  may negate that path though)
+                ctx.drawImage(canvas, 0, 1);
+                requestAnimationFrame(() => renderWaterfall());
+            }
+            requestAnimationFrame(() => renderWaterfall());
+        }
+
+
+    </script>
+</head>
+<body>
+<button onclick="initAudio()">Connect to audio</button>
+<canvas id="waterfall" width="1024" height="128" style="transform-origin: 0 0; transform: scale(2); image-rendering: pixelated">
+</canvas>
+</body>
+</html>
