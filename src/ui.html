@@ -83,7 +83,7 @@
             get writable() {
                 return new WritableStream({
                     write(yaesuCmd) {
-                        window.dispatchEvent(new CustomEvent("commandFromRadio", { detail: yaesuCmd })                        )
+                        window.dispatchEvent(new CustomEvent("commandFromRadio", { detail: yaesuCmd }))
                     }
                 })
             }
@@ -119,20 +119,33 @@
             clog(`port info: ${port.getInfo().toString()}`);
             clog(`opening port...`);
             await port.open({baudRate: 38400});
-            const [read, readRawDupe] = port.readable.tee();
+            //const [read, readRawDupe] = port.readable.tee();
             const catEventBridge = new YaesuCATEventBridge();
-            window.addEventListener("commandFromRadio", console.log);
+            //window.addEventListener("commandFromRadio", console.log);
             await Promise.all([
-                read.pipeThrough(yaesuDeframer())
+                port.readable.pipeThrough(yaesuDeframer())
                     .pipeTo(catEventBridge.writable),
-                readRawDupe.pipeTo(debugLogPort()),
                 catEventBridge.readable
                     .pipeThrough(yaesuFramer())
                     .pipeTo(port.writable)
             ]);
+            // Now try the very simple and clean ( :( )
+            // window.dispatchEvent(new CustomEvent("commandToRadio", {detail: new YaesuCmd("AI","0")}))"
+
         }
+        function sendCmd() {
+            const cmdbox = document.getElementById("cmdBox");
+            const cmd = cmdbox.value.slice(0,2);
+            const param = cmdbox.value.slice(2);
+            window.dispatchEvent(new CustomEvent("commandToRadio", {detail: new YaesuCmd(cmd,param)}));
+            cmd.value = "";
+            return false;
+        }
+
     </script>
 </head>
 <body><label for="console">Console</label><textarea id="console"></textarea></body>
 <button id="initButton" onClick="initWebSerial()">start</button>
+<input id="cmdBox" type="text">
+<button id="sendButton" onclick="sendCmd()">Send Command to radio</button>
 </html>
